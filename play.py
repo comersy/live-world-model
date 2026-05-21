@@ -22,11 +22,11 @@ import numpy as np
 import imageio
 import torch
 
-from models.v5_gan.model import WorldModel
+from models.v4_offline.model import WorldModel
 
 # ----------------------- settings -----------------------
 GIF_PATH = "data/loop.gif"
-WEIGHTS = "models/v5_gan/weights_gan.pt"
+WEIGHTS = "models/v4_offline/weights.pt"
 SIZE = 64
 DISPLAY_SCALE = 4
 FPS = 15
