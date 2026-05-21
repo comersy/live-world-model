@@ -35,7 +35,7 @@ LR = 1e-3
 EPOCHS = 400                 # passes over the whole loop
 TF_CHUNK = 20                # teacher-forcing chunk for truncated backprop
 ROLLOUT_EVERY = 3            # every N epochs, do a closed-loop rollout pass
-ROLLOUT_LEN = 12             # how many steps to roll out on own predictions
+ROLLOUT_LEN = 24             # how many steps to roll out on own predictions
 LOG_EVERY = 25
 # --------------------------------------------------------
 
