@@ -24,12 +24,19 @@ Runs on CPU. Keep the window focused so key presses are captured.
 The model always starts from scratch; nothing is saved or loaded.
 """
 
+import random
 from collections import deque
 
 import cv2
 import numpy as np
 import torch
 import torch.nn as nn
+
+# === METRICS START ===  (instrumentation; delete this block when done)
+import csv
+import time
+METRICS_PATH = "metrics.csv"
+# === METRICS END ===
 
 # --- pick which versioned model to run ---
 from models.v3_convlstm.model import WorldModel
@@ -42,6 +49,12 @@ DISPLAY_SCALE = 4    # display magnification factor
 WEBCAM_INDEX = 0     # change to 1, 2... if your webcam is not index 0
 TBPTT = 8            # truncated backprop window: detach state every N steps
                      # (keeps live training cheap and stable on CPU)
+MOTION_WEIGHT = 20.0 # how strongly the loss focuses on moving pixels.
+                     # 0 = plain MSE (v3 behavior); higher = ignore the static
+                     # background more and concentrate on where motion happens.
+SELF_FEED_PROB = 0.15 # during LIVE, chance to feed the model its OWN prediction
+                      # instead of the real frame. Helps the dream stay alive in
+                      # closed loop (mitigates, does not fully fix, drift). 0 = off.
 # --------------------------------------------------------
 
 DEVICE = torch.device("cpu")
@@ -69,6 +82,23 @@ def to_uint8(arr: np.ndarray) -> np.ndarray:
 
 def detach_state(state):
     return tuple(s.detach() for s in state)
+
+
+def motion_weighted_loss(prediction, target, prev_frame, strength):
+    """
+    MSE weighted by where real motion happens.
+
+    Pixels that change between prev_frame and target get a high weight; static
+    background pixels get the baseline weight of 1. This stops a mostly-static
+    scene from drowning out the moving region in the average error.
+
+    weight = 1 + strength * |target - prev_frame|
+    loss   = mean( weight * (prediction - target)^2 ) / mean(weight)
+    """
+    motion = (target - prev_frame).abs()           # per-pixel real motion
+    weight = 1.0 + strength * motion
+    sq = (prediction - target) ** 2
+    return (weight * sq).mean() / weight.mean()
 
 
 def main():
@@ -104,6 +134,31 @@ def main():
     window_loss = 0.0
     window_count = 0
 
+    # === METRICS START ===  (instrumentation; delete this block when done)
+    # Logs one row per frame to metrics.csv. Columns:
+    #   t           seconds since start
+    #   step        live step counter
+    #   mode        "live" or "dream"
+    #   loss        model MSE (live only; -1 in dream)
+    #   copy_loss   MSE of the trivial "next=current" baseline (live only; -1 in dream)
+    #   delta_abs   mean |predicted delta| -> ~0 means the model predicts no change
+    #   real_motion mean |real_{t+1} - real_t| (live only; -1 in dream) -> how much the scene moves
+    #   dream_motion mean |dream_t - dream_{t-1}| (dream only; -1 in live) -> ~0 means frozen dream
+    metrics_file = open(METRICS_PATH, "w", newline="")
+    metrics_writer = csv.writer(metrics_file)
+    metrics_writer.writerow(
+        ["t", "step", "mode", "loss", "copy_loss",
+         "delta_abs", "real_motion", "dream_motion"]
+    )
+    start_time = time.time()
+    prev_dream_arr = None  # for dream frame-to-frame motion
+    LOG_EVERY = 1          # log every frame; raise to 5 to log less often
+
+    def mean_delta_abs(prediction_arr, input_arr):
+        # predicted delta = prediction - input (the residual the model added)
+        return float(np.mean(np.abs(prediction_arr - input_arr)))
+    # === METRICS END ===
+
     while True:
         if not dreaming:
             # ---------------- LIVE MODE ----------------
@@ -117,7 +172,8 @@ def main():
             target_arr = to_gray_small(frame)
             target_tensor = to_tensor(target_arr)
 
-            loss = criterion(prediction, target_tensor)
+            loss = motion_weighted_loss(prediction, target_tensor,
+                                        cur_tensor, MOTION_WEIGHT)
             window_loss = window_loss + loss
             window_count += 1
 
@@ -135,6 +191,21 @@ def main():
             val = loss.item()
             ema_loss = val if ema_loss is None else 0.98 * ema_loss + 0.02 * val
             step += 1
+
+            # === METRICS START ===  (instrumentation; delete this block when done)
+            if step % LOG_EVERY == 0:
+                pred_arr = pred_to_array(prediction)
+                copy_loss = float(np.mean((cur_arr - target_arr) ** 2))   # next==current baseline
+                delta_abs = mean_delta_abs(pred_arr, cur_arr)
+                real_motion = float(np.mean(np.abs(target_arr - cur_arr)))
+                metrics_writer.writerow(
+                    [f"{time.time() - start_time:.2f}", step, "live",
+                     f"{val:.6f}", f"{copy_loss:.6f}",
+                     f"{delta_abs:.6f}", f"{real_motion:.6f}", -1]
+                )
+                metrics_file.flush()
+            # === METRICS END ===
+
             last_real = target_arr
 
             # display REAL | PREDICTION | ERROR
@@ -160,15 +231,36 @@ def main():
                         (10, big.shape[0] - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             cv2.imshow("live-world-model", big)
 
-            # the real frame becomes the next input
-            cur_arr = target_arr
-            cur_tensor = target_tensor
+            # next input: usually the real frame, but sometimes the model's own
+            # prediction (self-feeding) so it learns to stay stable in closed loop
+            if random.random() < SELF_FEED_PROB:
+                fed = pred_to_array(prediction)
+                cur_arr = fed
+                cur_tensor = to_tensor(fed)
+            else:
+                cur_arr = target_arr
+                cur_tensor = target_tensor
 
         else:
             # ---------------- DREAM MODE ----------------
             with torch.no_grad():
                 prediction, state = model.step(cur_tensor, state)
             dream_arr = pred_to_array(prediction)
+
+            # === METRICS START ===  (instrumentation; delete this block when done)
+            # delta the model added this step = dream_arr - its own input
+            dream_delta_abs = float(np.mean(np.abs(dream_arr - pred_to_array(cur_tensor))))
+            if prev_dream_arr is None:
+                dream_motion = -1.0
+            else:
+                dream_motion = float(np.mean(np.abs(dream_arr - prev_dream_arr)))
+            metrics_writer.writerow(
+                [f"{time.time() - start_time:.2f}", step, "dream",
+                 -1, -1, f"{dream_delta_abs:.6f}", -1, f"{dream_motion:.6f}"]
+            )
+            metrics_file.flush()
+            prev_dream_arr = dream_arr
+            # === METRICS END ===
 
             # the prediction becomes the next input (closed loop)
             cur_tensor = to_tensor(dream_arr)
@@ -200,6 +292,9 @@ def main():
             dream_steps = 0
             window_loss = 0.0
             window_count = 0
+            # === METRICS START ===  (instrumentation; delete this block when done)
+            prev_dream_arr = None
+            # === METRICS END ===
             if dreaming:
                 print(f"--> DREAM mode (after {step} live steps)")
             else:
@@ -212,6 +307,10 @@ def main():
 
     cap.release()
     cv2.destroyAllWindows()
+    # === METRICS START ===  (instrumentation; delete this block when done)
+    metrics_file.close()
+    print(f"Metrics written to {METRICS_PATH}")
+    # === METRICS END ===
     msg = f"Done after {step} live steps."
     if ema_loss is not None:
         msg += f" Final (smoothed) loss: {ema_loss:.4f}"
