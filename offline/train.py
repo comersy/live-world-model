@@ -1,5 +1,4 @@
 """
-offline / train.py
 
 Train the world model OFFLINE on a recorded loop (data/loop.gif), going over it
 many times. Not real-time. Saves weights to weights/v5_hires.pt.

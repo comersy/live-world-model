@@ -1,5 +1,4 @@
 """
-offline / play.py
 
 Load the trained model and watch it on the recorded loop. No training (frozen).
 
