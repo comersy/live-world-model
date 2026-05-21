@@ -1,18 +1,20 @@
 """
-dream-mirror / live.py
+live-world-model / live.py
 
-La boucle vivante. A chaque tour :
-  1. on capture la frame courante de la webcam
-  2. le modele predit a quoi ressemblera la frame SUIVANTE
-  3. on attend la vraie frame suivante
-  4. on calcule l'erreur et on fait UN pas de gradient (= live training)
-  5. on affiche  [ REEL | PREDICTION | ERREUR ]
+The living loop. On each iteration:
+  1. capture the current webcam frame
+  2. the model predicts what the NEXT frame will look like
+  3. wait for the real next frame
+  4. compute the error and take ONE gradient step (this is the live training)
+  5. display  [ REAL | PREDICTION | ERROR ]
 
-Lance avec :   python live.py
-Quitte avec :  touche Q  (dans la fenetre d'affichage)
+The model always starts from scratch: it learns only from the current live
+session. Nothing is saved or loaded.
 
-Tourne sur CPU. Garde la fenetre au premier plan pour que les touches
-soient capturees.
+Run with:    python live.py
+Quit with:   press Q (in the display window)
+
+Runs on CPU. Keep the window focused so key presses are captured.
 """
 
 import cv2
@@ -20,54 +22,56 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from model import DreamMirror
+# --- pick which versioned model to run ---
+from models.v1_frame_to_frame.model import WorldModel
+# ------------------------------------------
 
-# ----------------------- reglages -----------------------
-SIZE = 64            # resolution de travail (carre, niveaux de gris)
-LR = 1e-3            # learning rate du pas live
-DISPLAY_SCALE = 4    # facteur d'agrandissement de l'affichage
-WEBCAM_INDEX = 0     # change en 1, 2... si ta webcam n'est pas la 0
+# ----------------------- settings -----------------------
+SIZE = 64            # working resolution (square, grayscale)
+LR = 1e-3            # learning rate of the live step
+DISPLAY_SCALE = 4    # display magnification factor
+WEBCAM_INDEX = 0     # change to 1, 2... if your webcam is not index 0
 # --------------------------------------------------------
 
 
 def to_tensor(gray_frame: np.ndarray) -> torch.Tensor:
-    """image grise uint8 [H,W] -> tenseur float [1,1,SIZE,SIZE] dans [0,1]"""
+    """grayscale uint8 image [H,W] -> float tensor [1,1,SIZE,SIZE] in [0,1]"""
     small = cv2.resize(gray_frame, (SIZE, SIZE), interpolation=cv2.INTER_AREA)
     arr = small.astype(np.float32) / 255.0
     return torch.from_numpy(arr).unsqueeze(0).unsqueeze(0)
 
 
 def to_image(tensor: torch.Tensor) -> np.ndarray:
-    """tenseur [1,1,SIZE,SIZE] dans [0,1] -> image grise uint8 [SIZE,SIZE]"""
+    """tensor [1,1,SIZE,SIZE] in [0,1] -> grayscale uint8 image [SIZE,SIZE]"""
     arr = tensor.detach().squeeze().clamp(0, 1).numpy()
     return (arr * 255).astype(np.uint8)
 
 
 def main():
     device = torch.device("cpu")
-    model = DreamMirror().to(device)
+    model = WorldModel().to(device)  # always starts from scratch
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     criterion = nn.MSELoss()
 
     cap = cv2.VideoCapture(WEBCAM_INDEX)
     if not cap.isOpened():
         raise RuntimeError(
-            f"Impossible d'ouvrir la webcam (index {WEBCAM_INDEX}). "
-            "Essaie un autre WEBCAM_INDEX, ou verifie qu'aucune autre "
-            "application n'utilise la camera."
+            f"Could not open webcam (index {WEBCAM_INDEX}). "
+            "Try a different WEBCAM_INDEX, or make sure no other "
+            "application is using the camera."
         )
 
-    print("dream-mirror en cours. Fenetre active + touche Q pour quitter.")
+    print("live-world-model running. Focus the window + press Q to quit.")
 
-    # on a besoin de la frame precedente pour predire la courante
+    # we need the previous frame to predict the current one
     ret, frame = cap.read()
     if not ret:
-        raise RuntimeError("Lecture de la premiere frame impossible.")
+        raise RuntimeError("Could not read the first frame.")
     prev_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     prev_tensor = to_tensor(prev_gray)
 
     step = 0
-    ema_loss = None  # moyenne glissante de la loss, pour l'affichage
+    ema_loss = None  # smoothed loss for a stable on-screen readout
 
     while True:
         ret, frame = cap.read()
@@ -75,23 +79,23 @@ def main():
             break
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        target_tensor = to_tensor(gray)  # la vraie frame_{t+1}
+        target_tensor = to_tensor(gray)  # the real frame_{t+1}
 
-        # --- prediction a partir de la frame precedente ---
+        # --- predict from the previous frame ---
         prediction = model(prev_tensor)
 
-        # --- live training : un pas de gradient ---
+        # --- live training: one gradient step ---
         loss = criterion(prediction, target_tensor)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        # moyenne glissante pour un affichage stable
+        # smoothed loss for display
         val = loss.item()
         ema_loss = val if ema_loss is None else 0.98 * ema_loss + 0.02 * val
         step += 1
 
-        # --- affichage cote a cote : reel | prediction | erreur ---
+        # --- side-by-side display: real | prediction | error ---
         real_img = to_image(target_tensor)
         pred_img = to_image(prediction)
         err_img = cv2.absdiff(real_img, pred_img)
@@ -107,20 +111,20 @@ def main():
             interpolation=cv2.INTER_NEAREST,
         )
 
-        # labels + compteur de loss
-        cv2.putText(big, "REEL", (10, 24), cv2.FONT_HERSHEY_SIMPLEX,
+        # labels + loss counter
+        cv2.putText(big, "REAL", (10, 24), cv2.FONT_HERSHEY_SIMPLEX,
                     0.7, (255, 255, 255), 2)
         cv2.putText(big, "PREDICTION", (SIZE * DISPLAY_SCALE + 10, 24),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(big, "ERREUR", (2 * SIZE * DISPLAY_SCALE + 10, 24),
+        cv2.putText(big, "ERROR", (2 * SIZE * DISPLAY_SCALE + 10, 24),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         cv2.putText(big, f"step {step}  loss {ema_loss:.4f}",
                     (10, big.shape[0] - 14), cv2.FONT_HERSHEY_SIMPLEX,
                     0.6, (0, 255, 0), 2)
 
-        cv2.imshow("dream-mirror", big)
+        cv2.imshow("live-world-model", big)
 
-        # la frame courante devient la precedente pour le prochain tour
+        # the current frame becomes the previous one for the next iteration
         prev_tensor = target_tensor
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -128,7 +132,7 @@ def main():
 
     cap.release()
     cv2.destroyAllWindows()
-    print(f"Termine apres {step} pas. Loss finale (lissee) : {ema_loss:.4f}")
+    print(f"Done after {step} steps. Final (smoothed) loss: {ema_loss:.4f}")
 
 
 if __name__ == "__main__":
