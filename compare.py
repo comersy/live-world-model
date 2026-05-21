@@ -11,7 +11,6 @@ on the recorded loop, and report two metrics so the losses can be compared:
 Then it shows each dream visually, one after another (press any key to advance,
 Q to skip the rest).
 
-Run with:   python compare.py
 """
 
 import glob
@@ -23,7 +22,7 @@ import imageio
 import torch
 
 # NOTE: adapt to v4_offline in your repo.
-from models.v5_offline.model import WorldModel
+from models.v4_offline.model import WorldModel
 
 GIF_PATH = "data/loop.gif"
 EXP_DIR = "models/v5_offline/experiments"
