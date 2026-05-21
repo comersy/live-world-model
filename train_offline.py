@@ -32,6 +32,7 @@ GIF_PATH = "data/loop.gif"   # the recorded loop to train on
 WEIGHTS_OUT = "models/v4_offline/weights.pt"
 SIZE = 64
 LR = 1e-3
+MOTION_WEIGHT = 100.0   # how much moving pixels matter vs the static background
 EPOCHS = 400                 # passes over the whole loop
 TF_CHUNK = 20                # teacher-forcing chunk for truncated backprop
 ROLLOUT_EVERY = 3            # every N epochs, do a closed-loop rollout pass
@@ -55,6 +56,13 @@ def load_loop(path):
         gs.append(small.astype(np.float32) / 255.0)
     seq = torch.from_numpy(np.array(gs)).unsqueeze(1).to(DEVICE)  # [T,1,64,64]
     return seq
+
+def motion_loss(pred, target, prev):
+    # weight each pixel by how much it really moves between prev and target
+    motion = (target - prev).abs()
+    weight = 1.0 + MOTION_WEIGHT * motion
+    sq = (pred - target) ** 2
+    return (weight * sq).mean() / weight.mean()
 
 
 def main():
@@ -88,7 +96,7 @@ def main():
                 for k in range(ROLLOUT_LEN):
                     pred, state = model.step(inp, state)
                     target = seq[t + k + 1:t + k + 2]
-                    roll_loss = roll_loss + ((pred - target) ** 2).mean()
+                    roll_loss = roll_loss + motion_loss(pred, target, inp)
                     inp = pred  # feed own prediction back (like dreaming)
                 roll_loss = roll_loss / ROLLOUT_LEN
                 roll_loss.backward()
@@ -100,7 +108,7 @@ def main():
             else:
                 # teacher forcing: predict one step from the real frame
                 pred, state = model.step(seq[t:t + 1], state)
-                l = ((pred - seq[t + 1:t + 2]) ** 2).mean()
+                l = motion_loss(pred, seq[t + 1:t + 2], seq[t:t + 1])
                 running = running + l
                 chunk += 1
                 losses.append(l.item())

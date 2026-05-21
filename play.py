@@ -1,5 +1,4 @@
 """
-live-world-model / play.py
 
 Watch the OFFLINE-TRAINED v5 model on the recorded loop. No training here — the
 model is frozen (already trained by train_offline.py), this is just for judging.
@@ -16,7 +15,6 @@ Two modes, toggled with D:
 
 Keys:  D = toggle dream    Q = quit
 
-Run with:   python play.py
 """
 
 import cv2
@@ -24,11 +22,11 @@ import numpy as np
 import imageio
 import torch
 
-from models.v4_offline.model import WorldModel
+from models.v5_gan.model import WorldModel
 
 # ----------------------- settings -----------------------
 GIF_PATH = "data/loop.gif"
-WEIGHTS = "models/v4_offline/weights.pt"
+WEIGHTS = "models/v5_gan/weights_gan.pt"
 SIZE = 64
 DISPLAY_SCALE = 4
 FPS = 15
