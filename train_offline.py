@@ -40,6 +40,7 @@ LOG_EVERY = 25
 DEVICE = torch.device("cpu")
 
 
+
 def load_loop(path):
     frames = imageio.mimread(path, memtest=False)
     if not frames:
