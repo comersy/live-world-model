@@ -1,22 +1,21 @@
 """
-live-world-model / models / v5_offline / model.py
+core / models / v5_hires / model.py
 
-Same ConvLSTM + residual design as v3, but LARGER. The overfit test showed the
-68k-param model could learn the loop's dynamics but plateaued (residual error
-on motion never reached zero). v5 increases capacity so it can fit the loop
-more precisely, and is meant to be trained OFFLINE on a recorded loop with many
-epochs (see train_offline.py) rather than live frame-by-frame.
+ConvLSTM + residual world model, sized for 128x128 grayscale input.
 
-Changes vs v3:
-  - deeper encoder/decoder (extra conv stage, more channels)
-  - bigger ConvLSTM hidden state
-  - bottleneck at 8x8 instead of 16x16 (more abstraction, more context)
+Same design as v4 (recurrent ConvLSTM cell, predicts a residual delta added to
+the current frame), but with one extra down/up sampling stage so it can handle
+the higher resolution. The bottleneck stays at 8x8 so the recurrent memory
+operates on a compact, abstract representation.
 
-Version: v5 (offline-trained, larger ConvLSTM + residual)
+Generator-only; trained offline (see offline/train.py) and run live
+(see live/live.py).
 """
 
 import torch
 import torch.nn as nn
+
+SIZE = 128  # input resolution this model expects
 
 
 class ConvLSTMCell(nn.Module):
@@ -47,9 +46,11 @@ class WorldModel(nn.Module):
         super().__init__()
         self.hidden_channels = hidden_channels
 
-        # encode a frame [1,64,64] down to features [32,8,8]
+        # encoder: [1,128,128] -> [32,8,8]  (four /2 stages)
         self.encoder = nn.Sequential(
-            nn.Conv2d(1, 32, 4, stride=2, padding=1),   # -> [32,32,32]
+            nn.Conv2d(1, 32, 4, stride=2, padding=1),   # -> [32,64,64]
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 32, 4, stride=2, padding=1),  # -> [32,32,32]
             nn.ReLU(inplace=True),
             nn.Conv2d(32, 32, 4, stride=2, padding=1),  # -> [32,16,16]
             nn.ReLU(inplace=True),
@@ -59,18 +60,20 @@ class WorldModel(nn.Module):
 
         self.cell = ConvLSTMCell(in_channels=32, hidden_channels=hidden_channels)
 
-        # decode hidden state back to a DELTA image [1,64,64]
+        # decoder: hidden [64,8,8] -> delta [1,128,128]  (four x2 stages)
         self.decoder = nn.Sequential(
             nn.ConvTranspose2d(hidden_channels, 32, 4, stride=2, padding=1),  # -> [32,16,16]
             nn.ReLU(inplace=True),
             nn.ConvTranspose2d(32, 32, 4, stride=2, padding=1),               # -> [32,32,32]
             nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(32, 1, 4, stride=2, padding=1),                # -> [1,64,64]
+            nn.ConvTranspose2d(32, 32, 4, stride=2, padding=1),               # -> [32,64,64]
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(32, 1, 4, stride=2, padding=1),                # -> [1,128,128]
             nn.Tanh(),  # delta in [-1,1]
         )
 
     def init_state(self, batch, device):
-        return self.cell.init_state(batch, 8, 8, device)  # features are 8x8
+        return self.cell.init_state(batch, 8, 8, device)
 
     def step(self, frame, state):
         feat = self.encoder(frame)
@@ -84,12 +87,14 @@ class WorldModel(nn.Module):
 
 
 if __name__ == "__main__":
+    import sys, os
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
     model = WorldModel()
     state = model.init_state(1, torch.device("cpu"))
-    frame = torch.rand(1, 1, 64, 64)
+    frame = torch.rand(1, 1, SIZE, SIZE)
     for _ in range(3):
         pred, state = model.step(frame, state); frame = pred
     n = sum(p.numel() for p in model.parameters())
-    print(f"Per-step output: {tuple(pred.shape)}")
-    print(f"Hidden state:    {tuple(state[0].shape)}")
-    print(f"Parameters:      {n:,}")
+    print(f"input {SIZE}x{SIZE} -> output {tuple(pred.shape)}")
+    print(f"hidden state {tuple(state[0].shape)}")
+    print(f"parameters: {n:,}")
