@@ -1,5 +1,4 @@
 """
-live-world-model / train_offline.py
 
 Train the model OFFLINE on a recorded loop (a GIF), going over the whole
 sequence many times. This is far more effective than live training: in live
@@ -14,8 +13,6 @@ outputs, which is exactly what dreaming does.
 
 When done, weights are saved to the v5 folder. Then run live.py (pointed at v5)
 to dream from the trained model.
-
-Run with:   python train_offline.py
 """
 
 import time
