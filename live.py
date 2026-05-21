@@ -1,5 +1,4 @@
 """
-live-world-model / live.py
 
 Recurrent (ConvLSTM) version. Two modes, toggled with the D key:
 
@@ -43,6 +42,8 @@ from models.v3_convlstm.model import WorldModel
 # ------------------------------------------
 
 # ----------------------- settings -----------------------
+SOURCE = "video"    # "webcam" or "video" (loops a GIF/video file forever)
+VIDEO_PATH = "data/loop.gif"  # used when SOURCE == "video"
 SIZE = 64            # working resolution (square, grayscale)
 LR = 1e-3            # learning rate of the live step
 DISPLAY_SCALE = 4    # display magnification factor
@@ -84,6 +85,59 @@ def detach_state(state):
     return tuple(s.detach() for s in state)
 
 
+class FrameSource:
+    """
+    Unified frame source. Yields grayscale [SIZE,SIZE] float arrays in [0,1].
+      - "webcam": reads the camera live
+      - "video":  loads all frames of a GIF/video once and loops them forever
+    """
+
+    def __init__(self, source, webcam_index, video_path):
+        self.source = source
+        if source == "webcam":
+            self.cap = cv2.VideoCapture(webcam_index)
+            if not self.cap.isOpened():
+                raise RuntimeError(
+                    f"Could not open webcam (index {webcam_index}). "
+                    "Try another WEBCAM_INDEX or close apps using the camera."
+                )
+        elif source == "video":
+            import imageio
+            reader = imageio.mimread(video_path, memtest=False)
+            if not reader:
+                raise RuntimeError(f"No frames found in {video_path}")
+            # pre-convert every frame to grayscale [SIZE,SIZE] float [0,1]
+            self.frames = []
+            for f in reader:
+                arr = np.asarray(f)
+                if arr.ndim == 3:
+                    arr = cv2.cvtColor(arr[:, :, :3], cv2.COLOR_RGB2GRAY)
+                small = cv2.resize(arr, (SIZE, SIZE), interpolation=cv2.INTER_AREA)
+                self.frames.append(small.astype(np.float32) / 255.0)
+            self.idx = 0
+            print(f"Loaded {len(self.frames)} frames from {video_path} (looping)")
+        else:
+            raise ValueError(f"Unknown SOURCE: {source}")
+
+    def read(self):
+        """Return (ok, gray_small_float[SIZE,SIZE])."""
+        if self.source == "webcam":
+            ret, frame = self.cap.read()
+            if not ret:
+                return False, None
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            small = cv2.resize(gray, (SIZE, SIZE), interpolation=cv2.INTER_AREA)
+            return True, small.astype(np.float32) / 255.0
+        else:
+            arr = self.frames[self.idx]
+            self.idx = (self.idx + 1) % len(self.frames)  # loop forever
+            return True, arr
+
+    def release(self):
+        if self.source == "webcam":
+            self.cap.release()
+
+
 def motion_weighted_loss(prediction, target, prev_frame, strength):
     """
     MSE weighted by where real motion happens.
@@ -106,20 +160,14 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     criterion = nn.MSELoss()
 
-    cap = cv2.VideoCapture(WEBCAM_INDEX)
-    if not cap.isOpened():
-        raise RuntimeError(
-            f"Could not open webcam (index {WEBCAM_INDEX}). "
-            "Try a different WEBCAM_INDEX, or close other apps using the camera."
-        )
+    cap = FrameSource(SOURCE, WEBCAM_INDEX, VIDEO_PATH)
 
     print("live-world-model (ConvLSTM).  D = toggle dream   Q = quit")
 
     # prime with one real frame
-    ret, frame = cap.read()
+    ret, cur_arr = cap.read()
     if not ret:
         raise RuntimeError("Could not read the first frame.")
-    cur_arr = to_gray_small(frame)
     cur_tensor = to_tensor(cur_arr)
 
     state = model.init_state(batch=1, device=DEVICE)
@@ -166,10 +214,9 @@ def main():
             prediction, new_state = model.step(cur_tensor, state)
 
             # read the real next frame (the target)
-            ret, frame = cap.read()
+            ret, target_arr = cap.read()
             if not ret:
                 break
-            target_arr = to_gray_small(frame)
             target_tensor = to_tensor(target_arr)
 
             loss = motion_weighted_loss(prediction, target_tensor,
@@ -282,7 +329,8 @@ def main():
                         (10, big.shape[0] - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             cv2.imshow("live-world-model", big)
 
-            cap.grab()  # drain webcam buffer so it isn't stale on return
+            if SOURCE == "webcam":
+                cap.cap.grab()  # drain webcam buffer so it isn't stale on return
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord("q"):
@@ -300,9 +348,8 @@ def main():
             else:
                 print("--> LIVE mode")
                 # refresh input with a real frame; keep the hidden state
-                ret, frame = cap.read()
+                ret, cur_arr = cap.read()
                 if ret:
-                    cur_arr = to_gray_small(frame)
                     cur_tensor = to_tensor(cur_arr)
 
     cap.release()
