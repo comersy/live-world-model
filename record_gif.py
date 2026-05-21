@@ -28,8 +28,7 @@ SIZE = 64             # frame size the model uses (square, grayscale)
 DISPLAY_SCALE = 6     # preview magnification
 WEBCAM_INDEX = 0      # change to 1, 2... if needed
 FPS = 15              # playback fps of the saved GIF
-OUT_GIF = "loop.gif"          # model-size GIF (64x64 gray) for the test bench
-OUT_GIF_BIG = "loop_big.gif"  # scaled-up, nicer to look at
+OUT_GIF_BIG = "data/loop.gif"  # scaled-up, nicer to look at
 GRAYSCALE = True      # save the loop in grayscale (matches the model input)
 # --------------------------------------------------------
 
@@ -100,12 +99,7 @@ def main():
 
 def save_gifs(frames):
     duration = 1.0 / FPS
-
-    # model-size GIF (64x64). grayscale or color depending on setting.
-    small_rgb = [cv2.cvtColor(f, cv2.COLOR_GRAY2RGB) for f in frames]
-    imageio.mimsave(OUT_GIF, small_rgb, duration=duration, loop=0)
-    print(f"    saved {OUT_GIF}  ({len(frames)} frames, {SIZE}x{SIZE})")
-
+    
     # scaled-up version for viewing
     big = [
         cv2.resize(f, (SIZE * DISPLAY_SCALE, SIZE * DISPLAY_SCALE),
