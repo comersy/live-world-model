@@ -65,6 +65,7 @@ def main():
     print(f"Loaded {T} frames. GAN training for {EPOCHS} epochs.")
 
     G = WorldModel().to(DEVICE)
+    G.load_state_dict(torch.load("models/v4_offline/weights.pt", map_location=DEVICE))  # <-- pretraining
     D = Discriminator().to(DEVICE)
     g_opt = torch.optim.Adam(G.parameters(), lr=G_LR, betas=(0.5, 0.999))
     d_opt = torch.optim.Adam(D.parameters(), lr=D_LR, betas=(0.5, 0.999))
