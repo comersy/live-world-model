@@ -1,5 +1,4 @@
 """
-core / data_io.py
 
 Shared helpers for loading frames and converting to/from tensors, used by both
 offline training and live running so the conversion is identical everywhere.
