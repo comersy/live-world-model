@@ -150,7 +150,3 @@ the **live** setting, so the dream holds in real time — the original goal.
   and how aggressively to train closed-loop stability.
 - A `metrics.csv` logging block in live.py (clearly delimited) records loss,
   motion, and dream stability for diagnosis; delete the block when not needed.
-
-## License
-
-MIT.
