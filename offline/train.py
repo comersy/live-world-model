@@ -21,7 +21,7 @@ from core.losses import motion_weighted_loss
 GIF_PATH = "data/loop.gif"
 WEIGHTS_OUT = "weights/v5_hires.pt"
 LR = 1e-3
-EPOCHS = 1000
+EPOCHS = 500
 MOTION_WEIGHT = 50.0     # how much moving pixels matter (0 = plain MSE)
 TF_CHUNK = 20
 ROLLOUT_EVERY = 3
